@@ -26,6 +26,7 @@ from sklearn.metrics import precision_score
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.model_selection import GridSearchCV, cross_val_score, StratifiedKFold, learning_curve
 from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
 import warnings
 import scipy
 warnings.filterwarnings('ignore')
@@ -42,42 +43,43 @@ combine = pd.concat([train,test])
 # In[9]:
 
 
-train.groupby(train.Name.apply(lambda x: len(x)))['Survived'].mean()
+#train.groupby(train.Name.apply(lambda x: len(x)))['Survived'].mean()
 
 
 # In[10]:
 
 
-combine['Name_Len'] = combine['Name'].apply(lambda x :len(x))
-combine['Name_Len'] = pd.qcut(combine['Name_Len'], 5)
+
 
 
 # In[11]:
 
 
-combine.groupby(combine['Name'].apply(lambda x : x.split(',')[1]).apply(lambda x: x.split('.')[0]))['Survived'].mean()
+#combine.groupby(combine['Name'].apply(lambda x : x.split(',')[1]).apply(lambda x: x.split('.')[0]))['Survived'].mean()
 
 
 # In[12]:
 
 
-combine['Title'] = combine['Name'].apply(lambda x : x.split(',')[1]).apply(lambda x : x.split('.')[0])
-combine['Title'] = combine['Name'].replace(['Don','Dona' ,'Majoy', 'Capt', 'Jonkheer', 'Rev', 'Col','Sir'], 'Mr')
-combine['Title'] = combine['Name'].replace(['Mlle','Ms'], 'Miss')
-combine['Title'] = combine['Name'].replace(['the Countess','Mme','Lady','Dr'], 'Mrs')
+combine['Title'] = combine['Name'].apply(lambda x : x.split(', ')[1]).apply(lambda x : x.split('.')[0])
+combine['Title'] = combine['Title'].replace(['Don','Dona', 'Major', 'Capt', 'Jonkheer', 'Rev', 'Col','Sir','Dr'],'Mr')
+combine['Title'] = combine['Title'].replace(['Mlle','Ms'], 'Miss')
+combine['Title'] = combine['Title'].replace(['the Countess','Mme','Lady','Dr'], 'Mrs')
 df = pd.get_dummies(combine['Title'],prefix='Title')
 combine = pd.concat([combine, df], axis=1)
 
+combine['Name_Len'] = combine['Name'].apply(lambda x :len(x))
+combine['Name_Len'] = pd.qcut(combine['Name_Len'], 5)
 
 # In[13]:
 
 
 combine['Fname'] = combine['Name'].apply(lambda x:x.split(',')[0])
-combine['FamilySize'] = combine['SibSp'] + combine['Parch']
+
 dead_female_Fname = list(set(combine[(combine.Sex=='female') & (combine.Age>=12)
-                        & (combine.Survived==0) & (combine.FamilySize>1)]['Fname'].values))
+                        & (combine.Survived==0) & ((combine.Parch>0) | (combine.SibSp>0))]['Fname'].values))
 alive_male_Fname = list(set(combine[(combine.Sex=='male') & (combine.Age>=12) 
-                        & (combine.Survived==1) & (combine.FamilySize>1)]['Fname'].values))
+                        & (combine.Survived==1) & ((combine.Parch>0) | (combine.SibSp>0))]['Fname'].values))
 combine['Female_Dead_Family'] = np.where(combine['Fname'].isin(dead_female_Fname),1,0)
 combine['Male_Alive_Family'] = np.where(combine['Fname'].isin(alive_male_Fname),1,0)
 combine = combine.drop(['Name', 'Fname'], axis=1)
@@ -97,10 +99,9 @@ combine = combine.drop('Age', axis=1)
 
 # In[15]:
 
-
+combine['FamilySize'] = np.where(combine['SibSp'] + combine['Parch'] == 0 ,'Solo', np.where(combine['SibSp'] + combine['Parch'] <= 3, 'Small' , 'Big'))
 df = pd.get_dummies(combine['FamilySize'],prefix='FamilySize')
-combine = pd.concat([combine ,df],axis=1)
-combine = combine.drop(['SibSp', 'Parch', 'FamilySize'],axis=1)
+combine = pd.concat([combine ,df],axis=1).drop(['SibSp', 'Parch', 'FamilySize'],axis=1)
 
 
 # In[16]:
@@ -144,12 +145,10 @@ combine = pd.concat([combine, df], axis=1).drop('Sex',axis=1)
 
 
 # In[21]:
-"""combine['Fare'] = pd.qcut(combine.Fare,3)
-df = pd.get_dummies(combine.Fare,prefix='Fare').drop('Fare_(-0.001, 8.662]', axis=1)
-combine = pd.concat([combine, df], axis=1).drop('Fare', axis=1)"""
-combine.Fare = combine.Fare.fillna(26)
-df = pd.get_dummies(combine['Fare'],prefix='Fare')
-combine = pd.concat([combine, df], axis=1).drop('Fare',axis=1)
+combine['Fare'].fillna(combine['Fare'].dropna().median(), inplace=True)
+combine['Low_Fare'] = np.where(combine['Fare']<=8.662,1,0)
+combine['High_Fare'] = np.where(combine['Fare']>=26,1,0)
+combine = combine.drop('Fare',axis=1)
 # In[22]:
 
 
@@ -165,8 +164,8 @@ for feature in features:
 
 X_all = combine.iloc[:891, :].drop(['PassengerId', 'Survived'], axis=1)
 Y_all = combine.iloc[:891, :]['Survived']
-X_test = combine.iloc[:891, :].drop(['PassengerId', 'Survived'], axis=1)
-print(combine)
+X_test = combine.iloc[891:, :].drop(['PassengerId', 'Survived'], axis=1)
+
 # In[44]:
 
 
@@ -175,34 +174,69 @@ svc = SVC()
 knn = KNeighborsClassifier(n_neighbors = 3)
 dt = DecisionTreeClassifier()
 rf = RandomForestClassifier(n_estimators=300, min_samples_leaf=4, class_weight={0:0.745 ,1:0.255})
-gbdt = GradientBoostingClassifier(n_estimators=500, learning_rate=0.03, max_depth=3)
-xgb = XGBClassifier(max_depth=3, n_estimators=300, learning_rate=0.05)
-clfs = [lg, svc, knn, dt, rf, gbdt, xgb]
+gbdt = GradientBoostingClassifier(n_estimators=500, learning_rate=0.06, max_depth=3)
+xgb = XGBClassifier(max_depth=3, n_estimators=300, learning_rate=0.03)
+lgb = LGBMClassifier(max_depth=3, n_estimators=500, learning_rate=0.04)
+clfs = [lg, svc, gbdt, xgb, lgb]
 
 kfold = 10
 cv_results = []
 for classifier in clfs :
-    cv_results.append(cross_val_score(classifier, X_all, y = Y_all, scoring= "accuracy", cv = kfold , n_jobs=6))
+    cv_results.append(cross_val_score(classifier, X_all, y = Y_all, scoring= "accuracy", cv = kfold , n_jobs=7))
 
  
-x = ["LR","SVC","KNN","DT","RF","GBDT","XGB"]
+x = ["LG","SVC","GBDT","XGB","LGB"]
 cv_means = []
 cv_stds = []
 for cv_result in cv_results:
     cv_means.append(cv_result.mean())
     cv_stds.append(cv_result.std())
 
-plt.bar(x, cv_means, label=x)
-plt.show()
+#plt.bar(x, cv_means, label=x)
+#plt.ylim(0.85,0.95)
+#plt.show()
+#print(cv_means)
 
-# In[ ]:
+#=====================集成框架=======================
+class Ensemble(object):
+    def __init__(self, estimators):
+        self.estimators_names = []
+        self.estimators = []
+        for i in estimators:
+            self.estimators_names.append(i[0])
+            self.estimators.append(i[1])
 
+        self.clf = LogisticRegression()
 
+    def fit(self, train_x, train_y):
+        for i in self.estimators:
+            i.fit(train_x, train_y)
+        x = np.array([i.predict(train_x) for i in self.estimators]).T
+        y = train_y
+        self.clf.fit(x, y)
 
+    def predict(self, x):
+        x = np.array([i.predict(x) for i in self.estimators]).T
+        print(x)
+        return self.clf.predict(x)
 
+    def score(self, x, y):
+        s = precision_score(y, self.predict(x))
+        return s
 
-# In[ ]:
+#===================================================
 
-
-
-
+bag = Ensemble([ ('lgb',lgb), ('xgb', xgb),('gbdt',gbdt),('lg',lg) ])
+score = 0
+for i in range(0,10):
+    num_test = 0.20
+    X_train, X_cv, Y_train, Y_cv = train_test_split(X_all, Y_all, test_size=num_test)
+    bag.fit(X_train, Y_train)
+    #Y_test = bag.predict(X_test)
+    acc_xgb = round(bag.score(X_cv, Y_cv)*100, 2)
+    score+=acc_xgb
+bag.fit(X_all.values, Y_all.values) 
+Y_test = bag.predict(X_test.values).astype(int)
+submission = pd.DataFrame({'PassengerId': test['PassengerId'],'Survived':Y_test})
+submission.to_csv(r'submi.csv', index=False)
+print(score/10)
